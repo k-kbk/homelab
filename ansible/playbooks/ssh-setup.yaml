@@ -1,0 +1,15 @@
+---
+- name: Configure SSH key authentication
+  hosts: nodes
+
+  tasks:
+  - name: Install SSH public keys
+    ansible.posix.authorized_key:
+      user: "{{ item.user }}"
+      state: present
+      key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/' + item.key) }}"
+    loop:
+    - user: bk
+      key: id_ed25519_bk.pub
+    - user: ansible
+      key: id_ed25519_ansible.pub

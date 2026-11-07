@@ -1,0 +1,169 @@
+---
+- name: Deploy Blocky DNS as a native systemd service
+  hosts: nodes
+  become: true
+  gather_facts: true
+  serial: 1
+
+  vars_files:
+  - ../inventory/group_vars/blocky.yaml
+
+  vars:
+    blocky_dns_ip: "{{ ansible_host }}"
+    blocky_archive: "blocky_{{ blocky_version }}_{{ blocky_arch }}.tar.gz"
+    blocky_url: "https://github.com/0xERR0R/blocky/releases/download/{{ blocky_version }}/{{ blocky_archive }}"
+    blocky_install_dir: "/opt/blocky/{{ blocky_version }}"
+
+  pre_tasks:
+  - name: Verify supported architecture and DNS binding IP
+    ansible.builtin.assert:
+      that:
+      - ansible_system == 'Linux'
+      - ansible_architecture == 'x86_64'
+      - blocky_dns_ip | length > 0
+      fail_msg: 'Linux x86_64 and a valid IPv4/IPv6 DNS bind address are required.'
+
+  tasks:
+  - name: Install required packages
+    ansible.builtin.apt:
+      name:
+      - ca-certificates
+      - dnsutils
+      state: present
+      update_cache: true
+      cache_valid_time: 86400
+
+  - name: Create unprivileged Blocky account
+    ansible.builtin.user:
+      name: blocky
+      system: true
+      create_home: false
+      home: /nonexistent
+      shell: /usr/sbin/nologin
+
+  - name: Create directories
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+    loop:
+    - /etc/blocky
+    - /opt/blocky
+    - "{{ blocky_install_dir }}"
+
+  - name: Download checksum-verified Blocky release
+    ansible.builtin.get_url:
+      url: "{{ blocky_url }}"
+      dest: "/tmp/{{ blocky_archive }}"
+      checksum: "sha256:{{ blocky_sha256 }}"
+      mode: '0644'
+
+  - name: Extract Blocky release
+    ansible.builtin.unarchive:
+      src: "/tmp/{{ blocky_archive }}"
+      dest: "{{ blocky_install_dir }}"
+      remote_src: true
+      creates: "{{ blocky_install_dir }}/blocky"
+
+  - name: Ensure Blocky binary is executable
+    ansible.builtin.file:
+      path: "{{ blocky_install_dir }}/blocky"
+      state: file
+      owner: root
+      group: root
+      mode: '0755'
+
+  - name: Link active Blocky binary
+    ansible.builtin.file:
+      src: "{{ blocky_install_dir }}/blocky"
+      dest: /usr/local/bin/blocky
+      state: link
+      force: true
+    notify: Restart Blocky
+
+  - name: Deploy Blocky DNS configuration
+    ansible.builtin.template:
+      src: ../templates/blocky-setup/config.yaml.j2
+      dest: /etc/blocky/config.yaml
+      owner: root
+      group: blocky
+      mode: '0640'
+      validate: "{{ blocky_install_dir }}/blocky validate --config %s"
+    notify: Restart Blocky
+
+  - name: Install systemd service
+    ansible.builtin.copy:
+      dest: /etc/systemd/system/blocky.service
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        [Unit]
+        Description=Blocky DNS Proxy
+        Wants=network-online.target
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        User=blocky
+        Group=blocky
+        ExecStart=/usr/local/bin/blocky --config /etc/blocky/config.yaml
+        Restart=on-failure
+        RestartSec=5s
+        AmbientCapabilities=CAP_NET_BIND_SERVICE
+        CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+        NoNewPrivileges=true
+        ProtectSystem=strict
+        ProtectHome=true
+        PrivateTmp=true
+        PrivateDevices=true
+
+        [Install]
+        WantedBy=multi-user.target
+    notify: Restart Blocky
+
+  - name: Enable and start Blocky
+    ansible.builtin.systemd_service:
+      name: blocky.service
+      enabled: true
+      state: started
+      daemon_reload: true
+
+  - name: Apply changes before health check
+    ansible.builtin.meta: flush_handlers
+
+  - name: Wait for DNS TCP listener
+    ansible.builtin.wait_for:
+      host: "{{ blocky_dns_ip }}"
+      port: 53
+      timeout: 30
+
+  - name: Test UDP DNS resolution
+    ansible.builtin.command:
+      argv:
+      - dig
+      - "@{{ blocky_dns_ip }}"
+      - example.com
+      - A
+      - +time=3
+      - +tries=2
+      - +noall
+      - +comments
+      - +answer
+    register: blocky_dns_test
+    changed_when: false
+    failed_when: >-
+      blocky_dns_test.rc != 0 or  'status: NOERROR' not in blocky_dns_test.stdout or (blocky_dns_test.stdout | regex_search('(?m)^\\S+\\s+\\d+\\s+IN\\s+A\\s+\\d+\\.\\d+\\.\\d+\\.\\d+')) is none
+
+  - name: Show DNS result
+    ansible.builtin.debug:
+      msg: "{{ inventory_hostname }} ({{ blocky_dns_ip }}): {{ blocky_dns_test.stdout | trim }}"
+
+  handlers:
+  - name: Restart Blocky
+    ansible.builtin.systemd_service:
+      name: blocky.service
+      state: restarted
+      daemon_reload: true
