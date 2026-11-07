@@ -1,0 +1,34 @@
+---
+upstreams:
+  groups:
+    default:
+{% for upstream in blocky_upstreams %}
+      - {{ upstream | to_json }}
+{% endfor %}
+  strategy: parallel_best
+  timeout: 2s
+
+blocking:
+  denylists:
+    ads:
+{% for url in blocky_blocklists %}
+      - {{ url | to_json }}
+{% endfor %}
+  clientGroupsBlock:
+    default:
+      - ads
+  blockType: zeroIp
+  loading:
+    refreshPeriod: {{ blocky_refresh_period | to_json }}
+
+caching:
+  minTime: "0m"
+  maxTime: {{ blocky_cache_max_time | to_json }}
+  maxItemsCount: {{ blocky_cache_max_items }}
+
+ports:
+  dns: {{ (ansible_host ~ ':53') | to_json }}
+
+log:
+  level: info
+  format: text
