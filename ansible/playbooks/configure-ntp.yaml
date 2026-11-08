@@ -1,7 +1,6 @@
 ---
 - name: Configure NTP synchronization
   hosts: nodes
-  become: true
 
   vars_files:
   - ../inventory/group_vars/ntp.yaml
@@ -25,7 +24,7 @@
 
   - name: Configure NTP sources
     ansible.builtin.template:
-      src: ../templates/chrony.sources.j2
+      src: ../templates/chrony/homelab.sources.j2
       dest: /etc/chrony/sources.d/homelab.sources
       owner: root
       group: root

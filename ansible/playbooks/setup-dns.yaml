@@ -1,12 +1,10 @@
 ---
 - name: Deploy Blocky DNS as a native systemd service
   hosts: nodes
-  become: true
-  gather_facts: true
   serial: 1
 
   vars_files:
-  - ../inventory/group_vars/blocky.yaml
+  - ../inventory/group_vars/dns.yaml
 
   vars:
     blocky_dns_ip: "{{ ansible_host }}"
@@ -96,7 +94,7 @@
 
   - name: Deploy Blocky DNS configuration
     ansible.builtin.template:
-      src: ../templates/blocky-setup/config.yaml.j2
+      src: ../templates/blocky/config.yaml.j2
       dest: /etc/blocky/config.yaml
       owner: root
       group: blocky
