@@ -22,15 +22,46 @@
     blocky_archive: "blocky_{{ blocky_version }}_{{ blocky_arch }}.tar.gz"
     blocky_url: "https://github.com/0xERR0R/blocky/releases/download/{{ blocky_version }}/{{ blocky_archive }}"
     blocky_install_dir: "/opt/blocky/{{ blocky_version }}"
+    blocky_gateway_test_name: >-
+      {{ (blocky_service_names | first) ~ '.' ~ blocky_internal_domain }}
 
   pre_tasks:
-  - name: Verify supported architecture and DNS binding IP
+  - name: Verify DNS deployment inputs
     ansible.builtin.assert:
       that:
       - ansible_facts['system'] == 'Linux'
       - ansible_facts['architecture'] == 'x86_64'
       - blocky_dns_ip | length > 0
-      fail_msg: 'Linux x86_64 and a valid IPv4/IPv6 DNS bind address are required.'
+      - blocky_internal_domain | length > 0
+      - blocky_internal_domain is not match('^\*\.')
+      - blocky_internal_domain is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+      - blocky_service_names | length > 0
+      - node_ips | default({}) | length > 0
+      - blocky_service_names | intersect(node_ips.keys() | list) | length == 0
+      fail_msg: >-
+        Linux x86_64, a DNS suffix, at least one service name, and vaulted node_ips are required. Service and node names must not overlap.
+
+  - name: Verify service DNS labels
+    ansible.builtin.assert:
+      that:
+      - item is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
+      fail_msg: "Invalid service DNS label: {{ item }}"
+    loop: "{{ blocky_service_names }}"
+
+  - name: Verify vaulted Gateway address
+    ansible.builtin.assert:
+      that:
+      - gateway_vip | default('') is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
+      fail_msg: A valid gateway_vip must be defined in the vaulted all.yaml.
+    no_log: true
+
+  - name: Verify vaulted node records
+    ansible.builtin.assert:
+      that:
+      - item.key is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
+      - item.value is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
+    loop: "{{ node_ips | dict2items }}"
+    no_log: true
 
   tasks:
   - name: Install required packages
@@ -100,6 +131,7 @@
       group: blocky
       mode: '0640'
       validate: "{{ blocky_install_dir }}/blocky validate --config %s"
+    no_log: true
     notify: Restart Blocky
 
   - name: Install systemd service
@@ -163,12 +195,47 @@
       - +answer
     register: blocky_dns_test
     changed_when: false
+    no_log: true
     failed_when: >-
       blocky_dns_test.rc != 0 or  'status: NOERROR' not in blocky_dns_test.stdout or (blocky_dns_test.stdout | regex_search('(?m)^\\S+\\s+\\d+\\s+IN\\s+A\\s+\\d+\\.\\d+\\.\\d+\\.\\d+')) is none
 
-  - name: Show DNS result
+  - name: Test service DNS resolution through the Gateway
+    ansible.builtin.command:
+      argv:
+      - dig
+      - "@{{ blocky_dns_ip }}"
+      - "{{ blocky_gateway_test_name }}"
+      - A
+      - +short
+      - +time=3
+      - +tries=2
+    register: blocky_gateway_dns_test
+    changed_when: false
+    no_log: true
+    failed_when: >-
+      blocky_gateway_dns_test.rc != 0 or gateway_vip not in blocky_gateway_dns_test.stdout_lines
+
+  - name: Test direct node DNS resolution
+    ansible.builtin.command:
+      argv:
+      - dig
+      - "@{{ blocky_dns_ip }}"
+      - "{{ item.key }}.{{ blocky_internal_domain }}"
+      - A
+      - +short
+      - +time=3
+      - +tries=2
+    loop: "{{ node_ips | dict2items }}"
+    register: blocky_node_dns_test
+    changed_when: false
+    no_log: true
+    failed_when: >-
+      blocky_node_dns_test.rc != 0 or item.value not in blocky_node_dns_test.stdout_lines
+
+  - name: Show private DNS record summary
     ansible.builtin.debug:
-      msg: "{{ inventory_hostname }} ({{ blocky_dns_ip }}): {{ blocky_dns_test.stdout | trim }}"
+      msg: >-
+        Service records use the Cilium Gateway, while node records resolve directly. Address values are loaded only from the vaulted all.yaml.
 
   - name: Create systemd-resolved configuration directory
     ansible.builtin.file:
@@ -189,6 +256,7 @@
         DNS={{ blocky_dns_servers | join(' ') }}
         Domains=~.
         FallbackDNS=
+    no_log: true
     notify: Restart systemd-resolved
 
   - name: Apply system DNS configuration

@@ -26,6 +26,17 @@ caching:
   maxTime: {{ blocky_cache_max_time | to_json }}
   maxItemsCount: {{ blocky_cache_max_items }}
 
+customDNS:
+  customTTL: {{ blocky_custom_dns_ttl | to_json }}
+  filterUnmappedTypes: true
+  mapping:
+{% for service_name in blocky_service_names | sort %}
+    {{ (service_name ~ '.' ~ blocky_internal_domain) | to_json }}: {{ gateway_vip | to_json }}
+{% endfor %}
+{% for node_name, node_ip in node_ips | dictsort %}
+    {{ (node_name ~ '.' ~ blocky_internal_domain) | to_json }}: {{ node_ip | to_json }}
+{% endfor %}
+
 ports:
   dns: {{ (ansible_host ~ ':53') | to_json }}
 

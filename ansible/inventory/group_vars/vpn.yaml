@@ -1,0 +1,7 @@
+---
+tailscale_repository_channel: stable
+
+tailscale_tags:
+- tag:subnet-router
+
+tailscale_tailnet: Tsn9uBTKcg11CNTRL

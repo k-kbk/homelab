@@ -1,0 +1,245 @@
+---
+- name: Configure split-horizon DNS for HTTPS services
+  ansible.builtin.import_playbook: setup-dns.yaml
+
+- name: Configure Tailscale subnet routers
+  hosts: nodes
+  serial: 1
+
+  vars_files:
+  - ../inventory/group_vars/vpn.yaml
+
+  vars:
+    tailscale_advertised_routes:
+    - "{{ home_subnet }}"
+    tailscale_advertised_routes_csv: "{{ tailscale_advertised_routes | join(',') }}"
+    tailscale_tags_csv: "{{ tailscale_tags | join(',') }}"
+    tailscale_keyring_url: >-
+      https://pkgs.tailscale.com/{{ tailscale_repository_channel }}/ubuntu/{{ ansible_facts['distribution_release'] }}.noarmor.gpg
+    tailscale_repository_url: >-
+      https://pkgs.tailscale.com/{{ tailscale_repository_channel }}/ubuntu/{{ ansible_facts['distribution_release'] }}.tailscale-keyring.list
+
+  pre_tasks:
+  - name: Verify subnet-router inputs
+    ansible.builtin.assert:
+      that:
+      - ansible_facts['system'] == 'Linux'
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - home_subnet is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$')
+      - tailscale_tags | length > 0
+      fail_msg: >-
+        This playbook requires Ubuntu, an IPv4 CIDR in home_subnet, and at least one Tailscale device tag.
+
+  tasks:
+  - name: Install repository prerequisites
+    ansible.builtin.apt:
+      name:
+      - ca-certificates
+      state: present
+      update_cache: true
+      cache_valid_time: 86400
+
+  - name: Install Tailscale repository signing key
+    ansible.builtin.get_url:
+      url: "{{ tailscale_keyring_url }}"
+      dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Install Tailscale apt repository
+    ansible.builtin.get_url:
+      url: "{{ tailscale_repository_url }}"
+      dest: /etc/apt/sources.list.d/tailscale.list
+      owner: root
+      group: root
+      mode: '0644'
+    register: tailscale_repository
+
+  - name: Install Tailscale
+    ansible.builtin.apt:
+      name: tailscale
+      state: present
+      update_cache: "{{ tailscale_repository.changed }}"
+
+  - name: Enable IP forwarding for subnet routing
+    ansible.builtin.copy:
+      dest: /etc/sysctl.d/99-tailscale.conf
+      owner: root
+      group: root
+      mode: '0644'
+      content: |
+        net.ipv4.ip_forward = 1
+        net.ipv6.conf.all.forwarding = 1
+    notify: Apply Tailscale sysctl settings
+
+  - name: Apply forwarding settings before advertising routes
+    ansible.builtin.meta: flush_handlers
+
+  - name: Enable and start Tailscale
+    ansible.builtin.systemd_service:
+      name: tailscaled.service
+      enabled: true
+      state: started
+
+  - name: Read Tailscale state
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - status
+      - --json
+    register: tailscale_initial_status
+    changed_when: false
+    failed_when: false
+    check_mode: false
+    no_log: true
+
+  - name: Read the Tailscale backend state
+    ansible.builtin.set_fact:
+      tailscale_backend_state: >-
+        {{
+          (tailscale_initial_status.stdout | from_json).BackendState
+          if tailscale_initial_status.rc == 0 and tailscale_initial_status.stdout | length > 0
+          else 'NeedsLogin'
+        }}
+
+  - name: Require an auth key for a new node
+    ansible.builtin.assert:
+      that:
+      - vault_tailscale_auth_key | default('') | length > 0
+      fail_msg: >-
+        {{ inventory_hostname }} is not authenticated. Export a reusable, pre-authorized TAILSCALE_AUTH_KEY and run the playbook again.
+    when:
+    - not ansible_check_mode
+    - tailscale_backend_state in ['NeedsLogin', 'NoState']
+
+  - name: Require approval for a pending node
+    ansible.builtin.assert:
+      that:
+      - tailscale_backend_state != 'NeedsMachineAuth'
+      fail_msg: >-
+        {{ inventory_hostname }} is waiting for device approval in the Tailscale admin console. Approve it and run the playbook again.
+    when: not ansible_check_mode
+
+  - name: Authenticate new subnet router
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - up
+      - "--auth-key={{ vault_tailscale_auth_key }}"
+      - "--hostname={{ inventory_hostname }}"
+      - "--advertise-routes={{ tailscale_advertised_routes_csv }}"
+      - "--advertise-tags={{ tailscale_tags_csv }}"
+      - --accept-dns=false
+    when:
+    - not ansible_check_mode
+    - tailscale_backend_state in ['NeedsLogin', 'NoState']
+
+  - name: Start an authenticated but stopped node
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - up
+    changed_when: true
+    when:
+    - not ansible_check_mode
+    - tailscale_backend_state == 'Stopped'
+
+  - name: Wait for Tailscale to connect
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - status
+      - --json
+    register: tailscale_connected_status
+    changed_when: false
+    no_log: true
+    retries: 10
+    delay: 2
+    until: >-
+      tailscale_connected_status.rc == 0 and (tailscale_connected_status.stdout | from_json).BackendState == 'Running'
+    when: not ansible_check_mode
+
+  - name: Reconcile subnet-router preferences
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - set
+      - "--advertise-routes={{ tailscale_advertised_routes_csv }}"
+      - --accept-dns=false
+    changed_when: false
+    no_log: true
+    when: not ansible_check_mode
+
+  - name: Verify Tailscale is connected
+    ansible.builtin.command:
+      argv:
+      - tailscale
+      - status
+      - --json
+    register: tailscale_final_status
+    changed_when: false
+    no_log: true
+    failed_when: >-
+      tailscale_final_status.rc != 0 or (tailscale_final_status.stdout | from_json).BackendState != 'Running'
+    when: not ansible_check_mode
+
+  - name: Show advertised subnet
+    ansible.builtin.debug:
+      msg: >-
+        {{ inventory_hostname }} is connected and advertises the vaulted home subnet. Approve the route unless autoApprovers already does so.
+    when: not ansible_check_mode
+
+  handlers:
+  - name: Apply Tailscale sysctl settings
+    ansible.builtin.command:
+      argv:
+      - sysctl
+      - -p
+      - /etc/sysctl.d/99-tailscale.conf
+    changed_when: true
+
+- name: Configure Tailscale restricted DNS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars_files:
+  - ../inventory/group_vars/dns.yaml
+  - ../inventory/group_vars/vpn.yaml
+
+  vars:
+    tailscale_dns_nameservers: >-
+      {{
+        groups['nodes']
+        | sort
+        | map('extract', hostvars, 'ansible_host')
+        | list
+      }}
+
+  tasks:
+  - name: Configure restricted DNS through the Tailscale API
+    ansible.builtin.uri:
+      url: >-
+        https://api.tailscale.com/api/v2/tailnet/{{ tailscale_tailnet | urlencode }}/dns/split-dns
+      method: PATCH
+      user: "{{ vault_tailscale_api_token }}"
+      password: ""
+      force_basic_auth: true
+      body_format: json
+      body: "{{ {blocky_internal_domain: tailscale_dns_nameservers} }}"
+      status_code: 200
+      return_content: false
+    no_log: true
+    when:
+    - not ansible_check_mode
+    - tailscale_tailnet | length > 0
+    - vault_tailscale_api_token | default('') | length > 0
+
+  - name: Show manual restricted DNS settings
+    ansible.builtin.debug:
+      msg: >-
+        Tailscale API configuration was skipped. In the Tailscale DNS console, add the node addresses from the vaulted node_ips as restricted nameservers for {{ blocky_internal_domain }}. Clients must enable Tailscale DNS and subnet routes.
+    when: >-
+      tailscale_tailnet | length == 0 or vault_tailscale_api_token | default('') | length == 0
