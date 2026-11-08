@@ -1,0 +1,68 @@
+---
+- name: Configure NTP synchronization
+  hosts: nodes
+  become: true
+
+  vars_files:
+  - ../inventory/group_vars/ntp.yaml
+
+  tasks:
+  - name: Install chrony
+    ansible.builtin.apt:
+      name: chrony
+      state: present
+      update_cache: true
+
+  - name: Configure timezone
+    community.general.timezone:
+      name: "{{ ntp_timezone }}"
+
+  - name: Remove default Ubuntu NTP sources
+    ansible.builtin.file:
+      path: /etc/chrony/sources.d/ubuntu-ntp-pools.sources
+      state: absent
+    notify: Reload chrony sources
+
+  - name: Configure NTP sources
+    ansible.builtin.template:
+      src: ../templates/chrony.sources.j2
+      dest: /etc/chrony/sources.d/homelab.sources
+      owner: root
+      group: root
+      mode: '0644'
+    notify: Reload chrony sources
+
+  - name: Enable and start chrony
+    ansible.builtin.systemd_service:
+      name: chrony
+      enabled: true
+      state: started
+
+  - name: Apply NTP source changes
+    ansible.builtin.meta: flush_handlers
+
+  - name: Check NTP sources
+    ansible.builtin.command:
+      cmd: chronyc sources -v
+    register: ntp_sources
+    changed_when: false
+
+  - name: Display NTP sources
+    ansible.builtin.debug:
+      var: ntp_sources.stdout_lines
+
+  - name: Check NTP tracking
+    ansible.builtin.command:
+      cmd: chronyc tracking
+    register: ntp_tracking
+    changed_when: false
+
+  - name: Display NTP tracking
+    ansible.builtin.debug:
+      var: ntp_tracking.stdout_lines
+
+  handlers:
+  - name: Reload chrony sources
+    ansible.builtin.command:
+      cmd: chronyc reload sources
+    changed_when: true

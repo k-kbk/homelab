@@ -1,0 +1,15 @@
+---
+ntp_timezone: Asia/Seoul
+
+ntp_servers:
+- type: server
+  address: time.cloudflare.com
+  options: iburst
+
+- type: pool
+  address: kr.pool.ntp.org
+  options: iburst maxsources 2
+
+- type: pool
+  address: asia.pool.ntp.org
+  options: iburst maxsources 2
