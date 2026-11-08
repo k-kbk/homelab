@@ -5,8 +5,28 @@ upstreams:
 {% for upstream in blocky_upstreams %}
       - {{ upstream | to_json }}
 {% endfor %}
-  strategy: parallel_best
+  strategy: {{ blocky_upstream_strategy | to_json }}
   timeout: 2s
+
+bootstrapDns:
+{% for resolver in blocky_bootstrap_dns %}
+  - upstream: {{ resolver.upstream | to_json }}
+    ips:
+{% for ip in resolver.ips %}
+      - {{ ip | to_json }}
+{% endfor %}
+{% endfor %}
+
+dnssec:
+  validate: true
+
+rebindingProtection:
+  enable: true
+
+rateLimit:
+  enable: true
+  rate: 50
+  burst: 100
 
 blocking:
   denylists:
@@ -43,3 +63,4 @@ ports:
 log:
   level: info
   format: text
+  privacy: true

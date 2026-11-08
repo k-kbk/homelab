@@ -1,38 +1,38 @@
 ---
 - name: Configure Neovim as default editor
   hosts: nodes
+  become: true
 
   vars:
     nvim_user: bk
     nvim_home: "/home/{{ nvim_user }}"
 
   tasks:
-  - name: Install Neovim
-    ansible.builtin.apt:
-      name: neovim
-      state: present
-      update_cache: true
+    - name: Install Neovim
+      ansible.builtin.apt:
+        name: neovim
+        state: present
+        update_cache: true
+        cache_valid_time: 86400
 
-  - name: Set Neovim as default editor
-    community.general.alternatives:
-      name: editor
-      path: /usr/bin/nvim
+    - name: Set Neovim command alternatives
+      community.general.alternatives:
+        name: "{{ item }}"
+        path: /usr/bin/nvim
+        state: selected
+      loop:
+        - editor
+        - vi
 
-  - name: Set Neovim as default vi
-    community.general.alternatives:
-      name: vi
-      path: /usr/bin/nvim
-      state: selected
-
-  - name: Configure Neovim aliases in .bashrc
-    ansible.builtin.blockinfile:
-      path: "/home/{{ nvim_user }}/.bashrc"
-      marker: "# {mark} Neovim"
-      block: |
-        export EDITOR=nvim
-        export VISUAL=nvim
-        alias vi='nvim'
-        alias vim='nvim'
-      owner: "{{ nvim_user }}"
-      group: "{{ nvim_user }}"
-      mode: "0644"
+    - name: Configure Neovim aliases in .bashrc
+      ansible.builtin.blockinfile:
+        path: "{{ nvim_home }}/.bashrc"
+        marker: "# {mark} Neovim"
+        block: |
+          export EDITOR=nvim
+          export VISUAL=nvim
+          alias vi='nvim'
+          alias vim='nvim'
+        owner: "{{ nvim_user }}"
+        group: "{{ nvim_user }}"
+        mode: '0644'

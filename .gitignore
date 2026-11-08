@@ -15,3 +15,6 @@ override.tf.json
 terraform.rc
 
 # Ansible
+*.retry
+.ansible-vault-pass
+*.vault-password

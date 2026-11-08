@@ -2,9 +2,10 @@
 - name: Deploy Blocky DNS as a native systemd service
   hosts: nodes
   serial: 1
+  become: true
 
   vars_files:
-  - ../inventory/group_vars/dns.yaml
+    - ../inventory/group_vars/dns.yaml
 
   vars:
     blocky_dns_ip: "{{ ansible_host }}"
@@ -26,263 +27,278 @@
       {{ (blocky_service_names | first) ~ '.' ~ blocky_internal_domain }}
 
   pre_tasks:
-  - name: Verify DNS deployment inputs
-    ansible.builtin.assert:
-      that:
-      - ansible_facts['system'] == 'Linux'
-      - ansible_facts['architecture'] == 'x86_64'
-      - blocky_dns_ip | length > 0
-      - blocky_internal_domain | length > 0
-      - blocky_internal_domain is not match('^\*\.')
-      - blocky_internal_domain is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
-      - blocky_service_names | length > 0
-      - node_ips | default({}) | length > 0
-      - blocky_service_names | intersect(node_ips.keys() | list) | length == 0
-      fail_msg: >-
-        Linux x86_64, a DNS suffix, at least one service name, and vaulted node_ips are required. Service and node names must not overlap.
+    - name: Verify DNS deployment inputs
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['system'] == 'Linux'
+          - ansible_facts['architecture'] == 'x86_64'
+          - (blocky_dns_ip | ansible.utils.ipaddr('address')) is not false
+          - blocky_version is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+          - blocky_sha256 is match('^[a-f0-9]{64}$')
+          - blocky_upstream_strategy in ['parallel_best', 'random', 'strict']
+          - blocky_upstreams | select('match', '^https://') | list | length == blocky_upstreams | length
+          - blocky_internal_domain | length > 0
+          - blocky_internal_domain is not match('^\*\.')
+          - blocky_internal_domain is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+          - blocky_service_names | length > 0
+          - node_ips | default({}) | length > 0
+          - blocky_service_names | intersect(node_ips.keys() | list) | length == 0
+        fail_msg: >-
+          Linux x86_64, a valid Blocky release, encrypted upstreams, a DNS
+          suffix, at least one service name, and vaulted node_ips are required.
+          Service and node names must not overlap.
 
-  - name: Verify service DNS labels
-    ansible.builtin.assert:
-      that:
-      - item is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
-      fail_msg: "Invalid service DNS label: {{ item }}"
-    loop: "{{ blocky_service_names }}"
+    - name: Verify service DNS labels
+      ansible.builtin.assert:
+        that:
+          - item is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
+        fail_msg: "Invalid service DNS label: {{ item }}"
+      loop: "{{ blocky_service_names }}"
 
-  - name: Verify vaulted Gateway address
-    ansible.builtin.assert:
-      that:
-      - gateway_vip | default('') is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
-      fail_msg: A valid gateway_vip must be defined in the vaulted all.yaml.
-    no_log: true
+    - name: Verify vaulted Gateway address
+      ansible.builtin.assert:
+        that:
+          - (gateway_vip | default('') | ansible.utils.ipaddr('address')) is not false
+          - "'.' in gateway_vip"
+        fail_msg: A valid gateway_vip must be defined in the vaulted all.yaml.
+      no_log: true
 
-  - name: Verify vaulted node records
-    ansible.builtin.assert:
-      that:
-      - item.key is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
-      - item.value is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
-    loop: "{{ node_ips | dict2items }}"
-    no_log: true
+    - name: Verify vaulted node records
+      ansible.builtin.assert:
+        that:
+          - item.key is match('^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
+          - (item.value | ansible.utils.ipaddr('address')) is not false
+          - "'.' in item.value"
+      loop: "{{ node_ips | dict2items }}"
+      no_log: true
 
   tasks:
-  - name: Install required packages
-    ansible.builtin.apt:
-      name:
-      - ca-certificates
-      - dnsutils
-      state: present
-      update_cache: true
-      cache_valid_time: 86400
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - dnsutils
+        state: present
+        update_cache: true
+        cache_valid_time: 86400
 
-  - name: Create unprivileged Blocky account
-    ansible.builtin.user:
-      name: blocky
-      system: true
-      create_home: false
-      home: /nonexistent
-      shell: /usr/sbin/nologin
+    - name: Create unprivileged Blocky account
+      ansible.builtin.user:
+        name: blocky
+        system: true
+        create_home: false
+        home: /nonexistent
+        shell: /usr/sbin/nologin
 
-  - name: Create directories
-    ansible.builtin.file:
-      path: "{{ item }}"
-      state: directory
-      owner: root
-      group: root
-      mode: '0755'
-    loop:
-    - /etc/blocky
-    - /opt/blocky
-    - "{{ blocky_install_dir }}"
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /etc/blocky
+        - /opt/blocky
+        - "{{ blocky_install_dir }}"
 
-  - name: Download checksum-verified Blocky release
-    ansible.builtin.get_url:
-      url: "{{ blocky_url }}"
-      dest: "/tmp/{{ blocky_archive }}"
-      checksum: "sha256:{{ blocky_sha256 }}"
-      mode: '0644'
+    - name: Download checksum-verified Blocky release
+      ansible.builtin.get_url:
+        url: "{{ blocky_url }}"
+        dest: "/tmp/{{ blocky_archive }}"
+        checksum: "sha256:{{ blocky_sha256 }}"
+        mode: "0644"
 
-  - name: Extract Blocky release
-    ansible.builtin.unarchive:
-      src: "/tmp/{{ blocky_archive }}"
-      dest: "{{ blocky_install_dir }}"
-      remote_src: true
-      creates: "{{ blocky_install_dir }}/blocky"
+    - name: Extract Blocky release
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ blocky_archive }}"
+        dest: "{{ blocky_install_dir }}"
+        remote_src: true
+        creates: "{{ blocky_install_dir }}/blocky"
 
-  - name: Ensure Blocky binary is executable
-    ansible.builtin.file:
-      path: "{{ blocky_install_dir }}/blocky"
-      state: file
-      owner: root
-      group: root
-      mode: '0755'
+    - name: Ensure Blocky binary is executable
+      ansible.builtin.file:
+        path: "{{ blocky_install_dir }}/blocky"
+        state: file
+        owner: root
+        group: root
+        mode: "0755"
 
-  - name: Link active Blocky binary
-    ansible.builtin.file:
-      src: "{{ blocky_install_dir }}/blocky"
-      dest: /usr/local/bin/blocky
-      state: link
-      force: true
-    notify: Restart Blocky
+    - name: Link active Blocky binary
+      ansible.builtin.file:
+        src: "{{ blocky_install_dir }}/blocky"
+        dest: /usr/local/bin/blocky
+        state: link
+        force: true
+      notify: Restart Blocky
 
-  - name: Deploy Blocky DNS configuration
-    ansible.builtin.template:
-      src: ../templates/blocky/config.yaml.j2
-      dest: /etc/blocky/config.yaml
-      owner: root
-      group: blocky
-      mode: '0640'
-      validate: "{{ blocky_install_dir }}/blocky validate --config %s"
-    no_log: true
-    notify: Restart Blocky
+    - name: Deploy Blocky DNS configuration
+      ansible.builtin.template:
+        src: blocky/config.yaml.j2
+        dest: /etc/blocky/config.yaml
+        owner: root
+        group: blocky
+        mode: "0640"
+        validate: "{{ blocky_install_dir }}/blocky validate --config %s"
+      no_log: true
+      notify: Restart Blocky
 
-  - name: Install systemd service
-    ansible.builtin.copy:
-      dest: /etc/systemd/system/blocky.service
-      owner: root
-      group: root
-      mode: '0644'
-      content: |
-        [Unit]
-        Description=Blocky DNS Proxy
-        Wants=network-online.target
-        After=network-online.target
+    - name: Install systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/blocky.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Blocky DNS Proxy
+          Wants=network-online.target
+          After=network-online.target
 
-        [Service]
-        Type=simple
-        User=blocky
-        Group=blocky
-        ExecStart=/usr/local/bin/blocky --config /etc/blocky/config.yaml
-        Restart=on-failure
-        RestartSec=5s
-        AmbientCapabilities=CAP_NET_BIND_SERVICE
-        CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-        NoNewPrivileges=true
-        ProtectSystem=strict
-        ProtectHome=true
-        PrivateTmp=true
-        PrivateDevices=true
+          [Service]
+          Type=simple
+          User=blocky
+          Group=blocky
+          ExecStart=/usr/local/bin/blocky --config /etc/blocky/config.yaml
+          Restart=on-failure
+          RestartSec=5s
+          UMask=0027
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+          NoNewPrivileges=true
+          LockPersonality=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectClock=true
+          ProtectControlGroups=true
+          ProtectKernelLogs=true
+          ProtectKernelModules=true
+          ProtectKernelTunables=true
+          PrivateTmp=true
+          PrivateDevices=true
+          RestrictNamespaces=true
+          RestrictRealtime=true
+          RestrictSUIDSGID=true
+          SystemCallArchitectures=native
 
-        [Install]
-        WantedBy=multi-user.target
-    notify: Restart Blocky
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Blocky
 
-  - name: Enable and start Blocky
-    ansible.builtin.systemd_service:
-      name: blocky.service
-      enabled: true
-      state: started
-      daemon_reload: true
+    - name: Enable and start Blocky
+      ansible.builtin.systemd_service:
+        name: blocky.service
+        enabled: true
+        state: started
+        daemon_reload: true
 
-  - name: Apply changes before health check
-    ansible.builtin.meta: flush_handlers
+    - name: Apply changes before health check
+      ansible.builtin.meta: flush_handlers
 
-  - name: Wait for DNS TCP listener
-    ansible.builtin.wait_for:
-      host: "{{ blocky_dns_ip }}"
-      port: 53
-      timeout: 30
+    - name: Wait for DNS TCP listener
+      ansible.builtin.wait_for:
+        host: "{{ blocky_dns_ip }}"
+        port: 53
+        timeout: 30
 
-  - name: Test UDP DNS resolution
-    ansible.builtin.command:
-      argv:
-      - dig
-      - "@{{ blocky_dns_ip }}"
-      - example.com
-      - A
-      - +time=3
-      - +tries=2
-      - +noall
-      - +comments
-      - +answer
-    register: blocky_dns_test
-    changed_when: false
-    no_log: true
-    failed_when: >-
-      blocky_dns_test.rc != 0 or  'status: NOERROR' not in blocky_dns_test.stdout or (blocky_dns_test.stdout | regex_search('(?m)^\\S+\\s+\\d+\\s+IN\\s+A\\s+\\d+\\.\\d+\\.\\d+\\.\\d+')) is none
+    - name: Test UDP DNS resolution
+      ansible.builtin.command:
+        argv:
+          - dig
+          - "@{{ blocky_dns_ip }}"
+          - example.com
+          - A
+          - +short
+          - +time=3
+          - +tries=2
+      register: blocky_dns_test
+      changed_when: false
+      no_log: true
+      failed_when: >-
+        blocky_dns_test.rc != 0
+        or blocky_dns_test.stdout_lines
+        | select('match', '^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$')
+        | list | length == 0
 
-  - name: Test service DNS resolution through the Gateway
-    ansible.builtin.command:
-      argv:
-      - dig
-      - "@{{ blocky_dns_ip }}"
-      - "{{ blocky_gateway_test_name }}"
-      - A
-      - +short
-      - +time=3
-      - +tries=2
-    register: blocky_gateway_dns_test
-    changed_when: false
-    no_log: true
-    failed_when: >-
-      blocky_gateway_dns_test.rc != 0 or gateway_vip not in blocky_gateway_dns_test.stdout_lines
+    - name: Test service DNS resolution through the Gateway
+      ansible.builtin.command:
+        argv:
+          - dig
+          - "@{{ blocky_dns_ip }}"
+          - "{{ blocky_gateway_test_name }}"
+          - A
+          - +short
+          - +time=3
+          - +tries=2
+      register: blocky_gateway_dns_test
+      changed_when: false
+      no_log: true
+      failed_when: >-
+        blocky_gateway_dns_test.rc != 0 or gateway_vip not in blocky_gateway_dns_test.stdout_lines
 
-  - name: Test direct node DNS resolution
-    ansible.builtin.command:
-      argv:
-      - dig
-      - "@{{ blocky_dns_ip }}"
-      - "{{ item.key }}.{{ blocky_internal_domain }}"
-      - A
-      - +short
-      - +time=3
-      - +tries=2
-    loop: "{{ node_ips | dict2items }}"
-    register: blocky_node_dns_test
-    changed_when: false
-    no_log: true
-    failed_when: >-
-      blocky_node_dns_test.rc != 0 or item.value not in blocky_node_dns_test.stdout_lines
+    - name: Test direct node DNS resolution
+      ansible.builtin.command:
+        argv:
+          - dig
+          - "@{{ blocky_dns_ip }}"
+          - "{{ item.key }}.{{ blocky_internal_domain }}"
+          - A
+          - +short
+          - +time=3
+          - +tries=2
+      loop: "{{ node_ips | dict2items }}"
+      register: blocky_node_dns_test
+      changed_when: false
+      no_log: true
+      failed_when: >-
+        blocky_node_dns_test.rc != 0 or item.value not in blocky_node_dns_test.stdout_lines
 
-  - name: Show private DNS record summary
-    ansible.builtin.debug:
-      msg: >-
-        Service records use the Cilium Gateway, while node records resolve directly. Address values are loaded only from the vaulted all.yaml.
+    - name: Create systemd-resolved configuration directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-  - name: Create systemd-resolved configuration directory
-    ansible.builtin.file:
-      path: /etc/systemd/resolved.conf.d
-      state: directory
-      owner: root
-      group: root
-      mode: '0755'
+    - name: Configure Blocky as system DNS
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/10-blocky.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Resolve]
+          DNS={{ blocky_dns_servers | join(' ') }}
+          Domains=~.
+          FallbackDNS=
+      no_log: true
+      notify: Restart systemd-resolved
 
-  - name: Configure Blocky as system DNS
-    ansible.builtin.copy:
-      dest: /etc/systemd/resolved.conf.d/10-blocky.conf
-      owner: root
-      group: root
-      mode: '0644'
-      content: |
-        [Resolve]
-        DNS={{ blocky_dns_servers | join(' ') }}
-        Domains=~.
-        FallbackDNS=
-    no_log: true
-    notify: Restart systemd-resolved
+    - name: Apply system DNS configuration
+      ansible.builtin.meta: flush_handlers
 
-  - name: Apply system DNS configuration
-    ansible.builtin.meta: flush_handlers
-
-  - name: Verify system DNS resolution
-    ansible.builtin.command:
-      argv:
-      - resolvectl
-      - query
-      - example.com
-    register: system_dns_test
-    changed_when: false
-    retries: 3
-    delay: 2
-    until: system_dns_test.rc == 0
-    when: not ansible_check_mode
+    - name: Verify system DNS resolution
+      ansible.builtin.command:
+        argv:
+          - resolvectl
+          - query
+          - example.com
+      register: system_dns_test
+      changed_when: false
+      retries: 3
+      delay: 2
+      until: system_dns_test.rc == 0
+      when: not ansible_check_mode
 
   handlers:
-  - name: Restart Blocky
-    ansible.builtin.systemd_service:
-      name: blocky.service
-      state: restarted
-      daemon_reload: true
+    - name: Restart Blocky
+      ansible.builtin.systemd_service:
+        name: blocky.service
+        state: restarted
+        daemon_reload: true
 
-  - name: Restart systemd-resolved
-    ansible.builtin.systemd_service:
-      name: systemd-resolved.service
-      state: restarted
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd_service:
+        name: systemd-resolved.service
+        state: restarted

@@ -4,11 +4,21 @@ blocky_arch: "Linux_x86_64"
 blocky_sha256: "97ae4257e4f2ea7ee4e0622fca152019eb92224d81b41b2549f064e4cef5584e"
 
 blocky_upstreams:
-- "1.1.1.1"
-- "8.8.8.8"
+  - "https://one.one.one.one/dns-query"
+  - "https://dns.google/dns-query"
+blocky_upstream_strategy: strict
+blocky_bootstrap_dns:
+  - upstream: "https://one.one.one.one/dns-query"
+    ips:
+      - "1.1.1.1"
+      - "1.0.0.1"
+  - upstream: "https://dns.google/dns-query"
+    ips:
+      - "8.8.8.8"
+      - "8.8.4.4"
 
 blocky_blocklists:
-- "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+  - "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
 
 blocky_cache_max_items: 10000
 blocky_cache_max_time: "30m"
@@ -16,6 +26,6 @@ blocky_refresh_period: "24h"
 
 blocky_internal_domain: "lab.bokyeom.com"
 blocky_service_names:
-- grafana
-- argocd
+  - grafana
+  - argocd
 blocky_custom_dns_ttl: "5m"
