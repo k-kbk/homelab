@@ -20,9 +20,9 @@
           | list
         )
       }}
-    blocky_archive: "blocky_{{ blocky_version }}_{{ blocky_arch }}.tar.gz"
-    blocky_url: "https://github.com/0xERR0R/blocky/releases/download/{{ blocky_version }}/{{ blocky_archive }}"
-    blocky_install_dir: "/opt/blocky/{{ blocky_version }}"
+    blocky_archive: blocky_{{ blocky_version }}_{{ blocky_arch }}.tar.gz
+    blocky_url: https://github.com/0xERR0R/blocky/releases/download/{{ blocky_version }}/{{ blocky_archive }}
+    blocky_install_dir: /opt/blocky/{{ blocky_version }}
     blocky_gateway_test_name: >-
       {{ (blocky_service_names | first) ~ '.' ~ blocky_internal_domain }}
 
@@ -105,13 +105,13 @@
     - name: Download checksum-verified Blocky release
       ansible.builtin.get_url:
         url: "{{ blocky_url }}"
-        dest: "/tmp/{{ blocky_archive }}"
-        checksum: "sha256:{{ blocky_sha256 }}"
+        dest: /tmp/{{ blocky_archive }}
+        checksum: sha256:{{ blocky_sha256 }}
         mode: "0644"
 
     - name: Extract Blocky release
       ansible.builtin.unarchive:
-        src: "/tmp/{{ blocky_archive }}"
+        src: /tmp/{{ blocky_archive }}
         dest: "{{ blocky_install_dir }}"
         remote_src: true
         creates: "{{ blocky_install_dir }}/blocky"

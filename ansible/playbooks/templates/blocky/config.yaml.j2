@@ -39,7 +39,7 @@ blocking:
     refreshPeriod: {{ blocky_refresh_period | to_json }}
 
 caching:
-  minTime: "0m"
+  minTime: 0m
   maxTime: {{ blocky_cache_max_time | to_json }}
   maxItemsCount: {{ blocky_cache_max_items }}
 

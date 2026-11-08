@@ -5,7 +5,7 @@
 
   vars:
     nvim_user: bk
-    nvim_home: "/home/{{ nvim_user }}"
+    nvim_home: /home/{{ nvim_user }}
 
   tasks:
     - name: Install Neovim
@@ -35,4 +35,4 @@
           alias vim='nvim'
         owner: "{{ nvim_user }}"
         group: "{{ nvim_user }}"
-        mode: '0644'
+        mode: "0644"

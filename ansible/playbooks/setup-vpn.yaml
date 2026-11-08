@@ -48,7 +48,7 @@
       ansible.builtin.get_url:
         url: "{{ tailscale_keyring_url }}"
         dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
-        checksum: "sha256:{{ tailscale_keyring_sha256 }}"
+        checksum: sha256:{{ tailscale_keyring_sha256 }}
         owner: root
         group: root
         mode: "0644"
@@ -78,9 +78,9 @@
         sysctl_file: /etc/sysctl.d/99-tailscale.conf
       loop:
         - name: net.ipv4.ip_forward
-          value: "1"
+          value: 1
         - name: net.ipv6.conf.all.forwarding
-          value: "0"
+          value: 0
 
     - name: Enable and start Tailscale
       ansible.builtin.systemd_service:
@@ -137,10 +137,10 @@
         argv:
           - tailscale
           - up
-          - "--auth-key={{ vault_tailscale_auth_key }}"
-          - "--hostname={{ inventory_hostname }}"
-          - "--advertise-routes={{ tailscale_advertised_routes_csv }}"
-          - "--advertise-tags={{ tailscale_tags_csv }}"
+          - --auth-key={{ vault_tailscale_auth_key }}
+          - --hostname={{ inventory_hostname }}
+          - --advertise-routes={{ tailscale_advertised_routes_csv }}
+          - --advertise-tags={{ tailscale_tags_csv }}
           - --accept-dns=false
       changed_when: true
       no_log: true
@@ -180,7 +180,7 @@
         argv:
           - tailscale
           - set
-          - "--advertise-routes={{ tailscale_advertised_routes_csv }}"
+          - --advertise-routes={{ tailscale_advertised_routes_csv }}
           - --accept-dns=false
       changed_when: false
       no_log: true
