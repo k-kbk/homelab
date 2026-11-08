@@ -1,0 +1,121 @@
+---
+- name: Apply balanced Ubuntu server security and performance tuning
+  hosts: nodes
+  serial: 1
+  become: true
+
+  vars_files:
+    - ../inventory/group_vars/server-tuning.yaml
+
+  pre_tasks:
+    - name: Verify tuning target and configuration
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['system'] == 'Linux'
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - (server_tuning_sysctl_overrides | default({})) is mapping
+        fail_msg: >-
+          This playbook requires Ubuntu and a mapping for sysctl overrides.
+
+  tasks:
+    - name: Build effective sysctl configuration
+      ansible.builtin.set_fact:
+        server_tuning_effective_sysctl: >-
+          {{
+            (
+              server_tuning_security_sysctl
+              if server_tuning_security_enabled
+              else {}
+            )
+            | combine(
+                server_tuning_network_sysctl
+                if server_tuning_network_enabled
+                else {}
+              )
+            | combine(
+                server_tuning_performance_sysctl
+                if server_tuning_performance_enabled
+                else {}
+              )
+            | combine(
+                server_tuning_bbr_sysctl
+                if server_tuning_bbr_enabled
+                else {}
+              )
+            | combine(server_tuning_sysctl_overrides | default({}))
+          }}
+
+    - name: Install sysctl tooling
+      ansible.builtin.apt:
+        name: procps
+        state: present
+        update_cache: true
+        cache_valid_time: 86400
+
+    - name: Load BBR kernel module at boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/80-server-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          tcp_bbr
+      when: server_tuning_bbr_enabled
+
+    - name: Load BBR kernel module now
+      community.general.modprobe:
+        name: tcp_bbr
+        state: present
+      when: server_tuning_bbr_enabled
+
+    - name: Remove managed BBR module configuration when disabled
+      ansible.builtin.file:
+        path: /etc/modules-load.d/80-server-tuning.conf
+        state: absent
+      when: not server_tuning_bbr_enabled
+
+    - name: Install balanced sysctl configuration
+      ansible.builtin.template:
+        src: sysctl/server-tuning.conf.j2
+        dest: /etc/sysctl.d/80-server-tuning.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Apply sysctl configuration
+
+    - name: Apply tuning before verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read applied sysctl values
+      ansible.builtin.command:
+        argv:
+          - sysctl
+          - -n
+          - "{{ item.key }}"
+      loop: "{{ server_tuning_effective_sysctl | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: server_tuning_applied_sysctl
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Verify applied sysctl values
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.stdout.split() | join(' '))
+            == (item.item.value | string | split() | join(' '))
+        fail_msg: >-
+          {{ item.item.key }} is {{ item.stdout | trim }}, expected
+          {{ item.item.value }}.
+      loop: "{{ server_tuning_applied_sysctl.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Apply sysctl configuration
+      ansible.builtin.command:
+        cmd: sysctl --system
+      changed_when: true
