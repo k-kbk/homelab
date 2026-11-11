@@ -1,6 +1,0 @@
-all:
-  children:
-    nodes:
-      hosts:
-        node2:
-          ansible_host: "{{ node_ips.node2 }}"
