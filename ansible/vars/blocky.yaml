@@ -1,0 +1,36 @@
+---
+blocky_version: v0.36.0
+blocky_arch: Linux_x86_64
+
+blocky_download_url: >-
+  https://github.com/0xERR0R/blocky/releases/download/{{ blocky_version }}/blocky_{{ blocky_version }}_{{ blocky_arch }}.tar.gz
+
+blocky_sha256: 92c52187dc9140c683d7fe29ab2ebfb0db398ff66031558212b6aec451891540
+
+blocky_user: blocky
+blocky_group: blocky
+
+blocky_config_dir: /etc/blocky
+blocky_binary_path: /usr/local/bin/blocky
+
+blocky_dns_port: 53
+blocky_internal_domain: lab.bokyeom.com
+
+blocky_upstreams:
+  - "https://one.one.one.one/dns-query"
+  - "https://dns.quad9.net/dns-query"
+
+blocky_upstream_strategy: strict
+blocky_upstream_timeout: 2s
+
+blocky_bootstrap_dns:
+  - "tcp+udp:1.1.1.1"
+  - "tcp+udp:9.9.9.9"
+
+blocky_blocklists:
+  - "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/multi.txt"
+
+blocky_blocklist_refresh: 12h
+
+blocky_log_level: info
+
