@@ -16,5 +16,4 @@ terraform.rc
 
 # Ansible
 *.retry
-.ansible-vault-pass
-*.vault-password
+vault-pass

@@ -1,0 +1,93 @@
+---
+- name: Install and configure Blocky DNS
+  hosts: dns
+  become: true
+
+  vars_files:
+    - ../vars/blocky.yaml
+    - ../vars/vault.yaml
+
+  tasks:
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - tar
+          - gzip
+          - ca-certificates
+          - python3
+        state: present
+
+    - name: Create Blocky group
+      ansible.builtin.group:
+        name: "{{ blocky_group }}"
+        system: true
+        state: present
+
+    - name: Create Blocky user
+      ansible.builtin.user:
+        name: "{{ blocky_user }}"
+        group: "{{ blocky_group }}"
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Create Blocky configuration directory
+      ansible.builtin.file:
+        path: "{{ blocky_config_dir }}"
+        state: directory
+        owner: root
+        group: "{{ blocky_group }}"
+        mode: "0750"
+
+    - name: Download Blocky binary archive
+      ansible.builtin.get_url:
+        url: "{{ blocky_download_url }}"
+        dest: "/tmp/blocky-{{ blocky_version }}.tar.gz"
+        checksum: "sha256:{{ blocky_sha256 }}"
+        mode: "0644"
+
+    - name: Extract Blocky binary
+      ansible.builtin.unarchive:
+        src: "/tmp/blocky-{{ blocky_version }}.tar.gz"
+        dest: /usr/local/bin
+        remote_src: true
+        owner: root
+        group: root
+      notify: Restart Blocky
+
+    - name: Configure Blocky
+      ansible.builtin.template:
+        src: ../templates/blocky-config.yaml.j2
+        dest: "{{ blocky_config_dir }}/config.yaml"
+        owner: root
+        group: "{{ blocky_group }}"
+        mode: "0640"
+      notify: Restart Blocky
+
+    - name: Create systemd service
+      ansible.builtin.template:
+        src: ../templates/blocky.service.j2
+        dest: /etc/systemd/system/blocky.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Blocky
+
+    - name: Enable and start Blocky
+      ansible.builtin.systemd_service:
+        name: blocky
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Apply pending changes
+      ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Restart Blocky
+      ansible.builtin.systemd_service:
+        name: blocky
+        state: restarted
+        daemon_reload: true
+

@@ -1,0 +1,10 @@
+---
+all:
+  children:
+    dns:
+      hosts:
+        dns-01:
+          ansible_host: "{{ ip['dns-01'] }}"
+        dns-02:
+          ansible_host: "{{ ip['dns-02'] }}"
+

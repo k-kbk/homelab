@@ -1,0 +1,50 @@
+# Managed by Ansible
+
+---
+ports:
+  dns: {{ blocky_dns_port | int }}
+
+upstreams:
+  groups:
+    default:
+{% for upstream in blocky_upstreams %}
+      - {{ upstream }}
+{% endfor %}
+
+  strategy: {{ blocky_upstream_strategy }}
+  timeout: {{ blocky_upstream_timeout }}
+
+bootstrapDns:
+{% for resolver in blocky_bootstrap_dns %}
+  - {{ resolver }}
+{% endfor %}
+
+blocking:
+  denylists:
+    ads:
+{% for url in blocky_blocklists %}
+      - {{ url }}
+{% endfor %}
+
+  clientGroupsBlock:
+    default:
+      - ads
+
+  blockType: zeroIP
+
+  loading:
+    refreshPeriod: {{ blocky_blocklist_refresh }}
+    strategy: blocking
+
+customDNS:
+  customTTL: 1h
+  mapping:
+{% for hostname, address in ip.items() %}
+    {{ hostname }}.{{ blocky_internal_domain }}: {{ address }}
+{% endfor %}
+
+log:
+  level: {{ blocky_log_level }}
+  format: text
+  target: stdout
+
