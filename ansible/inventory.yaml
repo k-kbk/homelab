@@ -7,4 +7,10 @@ all:
           ansible_host: "{{ ip['dns-01'] }}"
         dns-02:
           ansible_host: "{{ ip['dns-02'] }}"
+    vpn:
+      hosts:
+        vpn-01:
+          ansible_host: "{{ ip['vpn-01'] }}"
+        vpn-02:
+          ansible_host: "{{ ip['vpn-02'] }}"
 

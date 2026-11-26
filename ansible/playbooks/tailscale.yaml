@@ -1,0 +1,108 @@
+---
+- name: Configure Tailscale subnet routers
+  hosts: vpn
+  become: true
+
+  vars_files:
+    - ../vars/tailscale.yaml
+    - ../vars/vault.yaml
+
+  tasks:
+    - name: Verify TUN device
+      ansible.builtin.stat:
+        path: /dev/net/tun
+      register: tun_device
+
+    - name: Assert TUN device exists
+      ansible.builtin.assert:
+        that:
+          - tun_device.stat.exists
+        fail_msg: /dev/net/tun is not available
+
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - ca-certificates
+          - python3
+        state: present
+
+    - name: Add Tailscale repository
+      ansible.builtin.get_url:
+        url: "{{ tailscale_repo_url }}"
+        dest: /etc/yum.repos.d/tailscale.repo
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install Tailscale
+      ansible.builtin.dnf:
+        name: tailscale
+        state: present
+
+    - name: Enable IPv4 forwarding
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-tailscale.conf
+        content: |
+          net.ipv4.ip_forward = 1
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Apply sysctl
+
+    - name: Apply pending sysctl changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable Tailscale service
+      ansible.builtin.systemd_service:
+        name: tailscaled
+        enabled: true
+        state: started
+
+    - name: Check Tailscale status
+      ansible.builtin.command:
+        cmd: tailscale status --json
+      register: tailscale_status
+      changed_when: false
+      failed_when: false
+
+    - name: Register Tailscale node
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - up
+          - "--auth-key={{ tailscale_auth_key }}"
+          - "--hostname={{ inventory_hostname }}"
+          - "--advertise-routes={{ ip_subnet }}"
+          - "--accept-dns={{ tailscale_accept_dns | lower }}"
+          - "--accept-routes={{ tailscale_accept_routes | lower }}"
+      when:
+        - (tailscale_status.stdout | default('{}', true) | from_json).BackendState | default('') != 'Running'
+      no_log: true
+
+    - name: Configure subnet route
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - set
+          - "--advertise-routes={{ ip_subnet }}"
+          - "--accept-dns={{ tailscale_accept_dns | lower }}"
+          - "--accept-routes={{ tailscale_accept_routes | lower }}"
+      changed_when: false
+
+    - name: Verify IPv4 forwarding
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.ip_forward
+      register: forwarding_status
+      changed_when: false
+
+    - name: Assert IPv4 forwarding enabled
+      ansible.builtin.assert:
+        that:
+          - forwarding_status.stdout == '1'
+
+  handlers:
+    - name: Apply sysctl
+      ansible.builtin.command:
+        cmd: sysctl -p /etc/sysctl.d/99-tailscale.conf
+      changed_when: true
+

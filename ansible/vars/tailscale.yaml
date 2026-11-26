@@ -1,0 +1,5 @@
+tailscale_repo_url: https://pkgs.tailscale.com/stable/rhel/10/tailscale.repo
+
+tailscale_accept_dns: false
+tailscale_accept_routes: false
+
